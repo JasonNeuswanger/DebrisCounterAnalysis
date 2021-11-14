@@ -76,7 +76,7 @@ class DebrisCounterAnalysis:
         if not os.path.exists(self.results_path): os.makedirs(self.results_path)
         if not os.path.exists(os.path.join(self.results_path, "Detection Images")): os.makedirs(os.path.join(self.results_path, "Detection Images"))
         # if not os.path.exists(os.path.join(self.results_path, "BG Subtracted Images")): os.makedirs(os.path.join(self.results_path, "BG Subtracted Images"))
-        self.files = sorted([os.path.join(self.image_path, f) for f in os.listdir(self.image_path) if os.path.isfile(os.path.join(self.image_path, f)) and f[-4:].lower() == ".jpg" and f[0] != "_"])
+        self.files = sorted([os.path.join(self.image_path, f) for f in os.listdir(self.image_path) if os.path.isfile(os.path.join(self.image_path, f)) and f[-4:].lower() == ".jpg" and f[0:2] == "20"])
         if first_frame_number is not None:
             self.files = [file for file in self.files if int(file.split(' ')[-1][:-4]) >= first_frame_number]
         if last_frame_number is not None:
@@ -105,7 +105,7 @@ class DebrisCounterAnalysis:
     def detect_and_save_particles(self, max_images=None):
         self.process_images(max_images)
         if len(self.excluded_images_too_dark) > 0:
-            excluded_image_list_path = os.path.join(self.results_path, self.site_name + " Excluded Images (Too Dark / No Flash).txt")
+            excluded_image_list_path = os.path.join(self.results_path, self.site_name + " Excluded Images (Too Dark No Flash).txt")
             with open(excluded_image_list_path, "w") as textfile:
                 for element in self.excluded_images_too_dark:
                     textfile.write(element + "\n")
