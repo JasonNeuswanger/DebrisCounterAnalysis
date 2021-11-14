@@ -540,28 +540,11 @@ class DebrisCounterAnalysis:
         plt.tight_layout()
         plt.savefig(os.path.join(self.results_path, title + '.pdf'))
 
-# Conventional one to test -- works well
-# a1 = DebrisCounterAnalysis("/Users/Jason/Desktop/Debris Counter Test", "2019-07-19 First Bridge")
-#
-# a = DebrisCounterAnalysis("D:/", "2019-05-29 First Bridge 2")
-# a.filter_and_summarize_particles(max_allowable_bubble_probability=0.99, do_overlays=False)
-#
-# b = DebrisCounterAnalysis("D:/", "2019-05-30 First Bridge 4")
-# b.filter_and_summarize_particles(max_allowable_bubble_probability=0.99, do_overlays=False)
-#
-# c = DebrisCounterAnalysis("D:/", "2019-05-30 First Bridge 5")
-# c.filter_and_summarize_particles(max_allowable_bubble_probability=0.99, do_overlays=False)
-#
-# d = DebrisCounterAnalysis("D:/", "2019-05-30 First Bridge 6")
-# d.filter_and_summarize_particles(max_allowable_bubble_probability=0.99, do_overlays=False)
+# Example usage
 
-# e = DebrisCounterAnalysis("D:/", "2019-05-29 First Bridge 1", first_frame_number=3757)
-# e.detect_and_save_particles()
-# e.filter_and_summarize_particles()
-#
-f = DebrisCounterAnalysis("D:/", "2019-08-05 Third Bridge")
-f.detect_and_save_particles()
-f.filter_and_summarize_particles()
+# result = DebrisCounterAnalysis("D:/", "2019-08-05 Third Bridge")
+# result.detect_and_save_particles()
+# result.filter_and_summarize_particles()
 
 # temp = DebrisCounterAnalysis("/Volumes/DebrisImgWA/", "2019-06-10 Third Bridge")
 # temp.filter_and_summarize_particles(max_allowable_bubble_probability=0.99, do_overlays=False)
