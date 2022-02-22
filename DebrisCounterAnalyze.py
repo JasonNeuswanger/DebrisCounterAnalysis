@@ -531,7 +531,7 @@ class DebrisCounterAnalysis:
         centers = [[contour['center'] for contour in image_contour_data['contours'] if contour['length_mm'] >= min_size_mm] for image_contour_data in self.all_non_bubble_contours]
         centers = [item for sublist in centers for item in sublist]  # flatten the list
         centers_x = [item[0] for item in centers]
-        centers_y = [item[1] for item in centers]
+        centers_y = list(IMAGE_DIMENSIONS[1] - np.array([item[1] for item in centers]))  # flip up/down from image coordinates for matplotlib
         plt.figure(figsize=(15, 10))
         plt.scatter(centers_x, centers_y, 1.0)
         plt.xlim([0, IMAGE_DIMENSIONS[0]])
