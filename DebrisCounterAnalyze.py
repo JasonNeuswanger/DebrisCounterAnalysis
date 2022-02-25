@@ -275,7 +275,6 @@ class DebrisCounterAnalysis:
         self.intensity_multipliers = mean_of_blurred_median / blurred_median  # divide that average intensity by the blurred median image values to get an array of multipliers
 
     def process_images(self, max_images=None):
-        print("Creating initial background image.")
         num_images = len(self.files) if max_images is None else max_images
         self.total_volume_sampled = VOLUME_SAMPLED_PER_IMAGE_M3 * num_images * self.image_proportion_processed
         all_filenames = [os.path.basename(file_path) for file_path in self.files]
@@ -286,6 +285,7 @@ class DebrisCounterAnalysis:
             self.load_raw_contours()
             processed_filenames = [file_data['image_file'] for file_data in self.all_contours]
             filenames_to_process = [filename for filename in all_filenames if filename not in processed_filenames]
+        print("Creating initial background image.")
         initial_median_files = filenames_to_process[:NUM_MEDIAN_IMAGES]  # initialize median files
         self.median_image_arrays = [np.asarray(cv2.imread(self.files[all_filenames.index(filename)], cv2.IMREAD_GRAYSCALE)) for filename in initial_median_files]
         self.compute_current_median()
