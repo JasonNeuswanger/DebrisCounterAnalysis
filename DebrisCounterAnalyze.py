@@ -59,6 +59,8 @@ class DebrisCounterAnalysis:
         self.site_name = site_name
         self.image_path = os.path.join(folder_location, site_name)
         self.results_path = os.path.join(folder_location, site_name, "_results")
+        self.full_filename = os.path.join(self.results_path, self.site_name + " Detection Data.json")
+        self.partial_filename = os.path.join(self.results_path, self.site_name + " Detection Data Partial.json")
         # Here's how the size class counting limit system works (to prevent taking up too much time/space counting millions of the smallest particles).
         # We keep a running total of particles counted by size class for the entire analysis in self.size_class_particle_totals.
         # We only add a detected particle to the totals (and save its contour) if the size_class_counting_flag for its size class is 1.
@@ -83,14 +85,33 @@ class DebrisCounterAnalysis:
             self.files = [file for file in self.files if int(file.split(' ')[-1][:-4]) <= last_frame_number]
         if len(excluded_frames) > 0:
             self.files = [file for file in self.files if int(file.split(' ')[-1][:-4]) <= last_frame_number]
+        # The main exclusion mask is used when initially processing images and excludes whole regions of images from analysis at all.
+        # This is the preferred and most efficient way to exclude obviously bad regions.
         exclusion_mask_path = os.path.join(self.image_path, "_exclusion_mask.jpg")
         if os.path.isfile(exclusion_mask_path):
             mask_image = np.asarray(cv2.imread(exclusion_mask_path, cv2.IMREAD_GRAYSCALE))
+            _, mask_image = cv2.threshold(mask_image, 127, 255, cv2.THRESH_BINARY)  # threshold to round off jpeg artifacts
             self.exclusion_mask = mask_image / np.max(mask_image)  # rescale from max of 255 to max of 1, so I can use it as a multiplier
             self.image_proportion_processed = self.exclusion_mask.mean()  # because it's all 0 or 1, the mean of the mask is the proportion of the image at 1, i.e. the proportion not masked out
         else:
             self.exclusion_mask = None
             self.image_proportion_processed = 1
+        post_exclusion_mask_path = os.path.join(self.image_path, "_exclusion_mask_post.jpg")
+        # The post exclusion mask is applied after processing the image, to eliminate regions with clearly anomalous detections due to
+        # problems that were overlooked when creating the initial mask (a blade of grass that was waving around unnoticed, etc). For this one,
+        # the centroid of each detected contour is compared with the value of the mask at that position, which is much less efficient
+        # than the exclusion mask used during initial processing, but it's a decent band-aid for fixing image sets after processing.
+        if os.path.isfile(post_exclusion_mask_path):
+            post_mask_image = np.asarray(cv2.imread(post_exclusion_mask_path, cv2.IMREAD_GRAYSCALE))
+            _, post_mask_image = cv2.threshold(post_mask_image, 127, 255, cv2.THRESH_BINARY)  # threshold to round off jpeg artifacts
+            self.post_exclusion_mask = post_mask_image / np.max(post_mask_image)  # rescale from max of 255 to max of 1, so I can use it as a multiplier
+            if self.exclusion_mask is not None:
+                self.image_proportion_processed = (self.exclusion_mask * self.post_exclusion_mask).mean()  # because it's all 0 or 1, the mean of the mask is the proportion of the image at 1, i.e. the proportion not masked out
+            else:
+                self.image_proportion_processed = self.post_exclusion_mask.mean()
+        else:
+            self.post_exclusion_mask = None
+
 
     def get_test_image(self, i):
         # Will return a single background-subtracted gray image for playing around with other algorithms
@@ -111,8 +132,39 @@ class DebrisCounterAnalysis:
                     textfile.write(element + "\n")
         self.save_raw_contours()
 
-    def filter_and_summarize_particles(self, max_allowable_bubble_probability=0.5, spreadsheet_count=200, do_overlays=True):
+    def update_qc_centroids(self, max_allowable_bubble_probability=0.99):
+        """ Utility to redo the centroid map for building post-processing exclusion filters in image sets that didn't start with one. """
         self.load_raw_contours()
+        if self.post_exclusion_mask is not None:
+            def is_not_masked_out(contour):
+                return self.post_exclusion_mask[contour['center'][1], contour['center'][0]] > 0.5
+            self.all_contours = [{
+                'image_file': contours_in_image['image_file'],
+                'contours': [contour for contour in contours_in_image['contours'] if is_not_masked_out(contour)]
+            } for contours_in_image in self.all_contours]
+        self.all_non_bubble_contours = [{
+            'image_file': contours_in_image['image_file'],
+            'contours': [contour for contour in contours_in_image['contours'] if contour['bubble_probability'] <= max_allowable_bubble_probability]
+        } for contours_in_image in self.all_contours]
+        self.excluded_bubble_contours = [{
+            'image_file': contours_in_image['image_file'],
+            'contours': [contour for contour in contours_in_image['contours'] if contour['bubble_probability'] > max_allowable_bubble_probability]
+        } for contours_in_image in self.all_contours]
+        self.plot_particle_centroids(for_masking=True)
+
+    def filter_and_summarize_particles(self, max_allowable_bubble_probability=0.5, spreadsheet_count=200, do_overlays=True, exclude_images=None):
+        self.load_raw_contours()
+        if exclude_images is not None:
+            self.exclude_images(exclude_images)
+        # result.all_contours[0]['contours'][0]['center']
+        # result.post_exclusion_mask[contour_center[1], contour_center[0]]
+        if self.post_exclusion_mask is not None:
+            def is_not_masked_out(contour):
+                return self.post_exclusion_mask[contour['center'][1], contour['center'][0]] > 0.5
+            self.all_contours = [{
+                'image_file': contours_in_image['image_file'],
+                'contours': [contour for contour in contours_in_image['contours'] if is_not_masked_out(contour)]
+            } for contours_in_image in self.all_contours]
         self.all_non_bubble_contours = [{
             'image_file': contours_in_image['image_file'],
             'contours': [contour for contour in contours_in_image['contours'] if contour['bubble_probability'] <= max_allowable_bubble_probability]
@@ -127,6 +179,7 @@ class DebrisCounterAnalysis:
         self.plot_particle_centroids('Particle Detection Locations 0.5+ mm')
         self.plot_particle_centroids('Particle Detection Locations 1.5+ mm', 1.5)
         self.plot_particle_centroids('Particle Detection Locations 2.5+ mm', 2.5)
+        self.plot_particle_centroids(for_masking=True)
         self.export_particle_spreadsheet(self.all_non_bubble_contours, 'Actual Debris', 'Largest', spreadsheet_count)
         self.export_particle_spreadsheet(self.excluded_bubble_contours, 'Excluded Bubbles', 'Largest', spreadsheet_count)
         self.export_particle_spreadsheet(self.all_non_bubble_contours, 'Actual Debris', 'Random', spreadsheet_count)
@@ -223,16 +276,23 @@ class DebrisCounterAnalysis:
 
     def process_images(self, max_images=None):
         print("Creating initial background image.")
-        initial_median_files = self.files[:NUM_MEDIAN_IMAGES]  # initialize median files
-        self.median_image_arrays = [np.asarray(cv2.imread(file, cv2.IMREAD_GRAYSCALE)) for file in initial_median_files]
-        self.compute_current_median()
-        self.compute_intensity_multipliers()  # might need to also add this in the loop every 200 images or so if lighting is varying
-        self.all_contours = []
         num_images = len(self.files) if max_images is None else max_images
         self.total_volume_sampled = VOLUME_SAMPLED_PER_IMAGE_M3 * num_images * self.image_proportion_processed
-        for i in range(num_images):
+        all_filenames = [os.path.basename(file_path) for file_path in self.files]
+        if not os.path.exists(self.partial_filename):
+            self.all_contours = []
+            filenames_to_process = all_filenames
+        else:
+            self.load_raw_contours()
+            processed_filenames = [file_data['image_file'] for file_data in self.all_contours]
+            filenames_to_process = [filename for filename in all_filenames if filename not in processed_filenames]
+        initial_median_files = filenames_to_process[:NUM_MEDIAN_IMAGES]  # initialize median files
+        self.median_image_arrays = [np.asarray(cv2.imread(self.files[all_filenames.index(filename)], cv2.IMREAD_GRAYSCALE)) for filename in initial_median_files]
+        self.compute_current_median()
+        self.compute_intensity_multipliers()  # might need to also add this in the loop every 200 images or so if lighting is varying
+        for image_filename in filenames_to_process:
+            i = all_filenames.index(image_filename)
             print(self.site_name, ": Processing image", i + 1, "of", num_images)
-            image_filename = os.path.basename(self.files[i])
             if (i > NUM_MEDIAN_IMAGES / 2) and (i < num_images - NUM_MEDIAN_IMAGES / 2):
                 del self.median_image_arrays[0]
                 next_median_file = self.files[i + int(np.floor(NUM_MEDIAN_IMAGES / 2))]
@@ -261,24 +321,32 @@ class DebrisCounterAnalysis:
             if i >= MIN_IMAGES_PER_SIZE_CLASS:
                 size_class_indices_exceeding_max_particles = np.where(self.size_class_particle_totals >= MAX_PARTICLES_PER_SIZE_CLASS)
                 self.size_class_counting_flags[size_class_indices_exceeding_max_particles] = 0
+            if i % 10 == 0:
+                self.save_raw_contours(partial=True)
+            if i % 100 == 0:
+                self.compute_intensity_multipliers()
 
     ##################################################################################################################################
     # SAVE RAW RESULTS TO FILE
     ##################################################################################################################################
 
-    def save_raw_contours(self):
+    def save_raw_contours(self, partial=False):
         print("Saving raw contours to file.")
         saved_data = {
             'all_contours': self.all_contours,
             'total_volume_sampled': self.total_volume_sampled,
             'size_class_images_counted': list(self.size_class_images_counted)
         }
-        with open(os.path.join(self.results_path, self.site_name + " Detection Data.json"), "w") as output_file:
+        filename_to_write = self.partial_filename if partial else self.full_filename
+        with open(filename_to_write, "w") as output_file:
             json.dump(saved_data, output_file)
+        if not partial:
+            if os.path.exists(self.partial_filename):
+                os.remove(self.partial_filename)
 
-    def load_raw_contours(self):
+    def load_raw_contours(self, partial=True):
         print("Loading raw contours from file.")
-        saved_contours_path = os.path.join(self.results_path, self.site_name + " Detection Data.json")
+        saved_contours_path = self.partial_filename if partial else self.full_filename
         if not os.path.exists(saved_contours_path):
             raise ValueError("Tried to load detected contours but file '{0}' not found.".format(saved_contours_path))
         loaded_data = json.loads(open(saved_contours_path, "r").read())
@@ -370,6 +438,16 @@ class DebrisCounterAnalysis:
         cv2.imwrite(image_path, warped)
         height, width, channels = warped.shape
         return image_path, height, width
+
+    def exclude_images(self, which_images):
+        """ The input which_contours is a list, with elements being either ints referencing individual images to exclude or lists containing the first
+            and last element in a range of images to exclude. """
+        images_to_exclude = [item for item in which_images if isinstance(item, int)]
+        image_ranges = [item for item in which_images if isinstance(item, list) and len(item) == 2]
+        for range_start, range_end in image_ranges:
+            for i in np.arange(range_start, range_end+1):
+                images_to_exclude.append(i)
+        self.all_contours = [contour_image for contour_image in self.all_contours if int(contour_image['image_file'].split(" ")[-1][:5]) not in images_to_exclude]
 
     def export_contours(self, contours, sheet_title):
         workbook = xlsxwriter.Workbook(os.path.join(self.results_path, '{0} {1}.xlsx'.format(self.site_name, sheet_title)))
@@ -527,18 +605,40 @@ class DebrisCounterAnalysis:
 # PLOT PARTICLE CENTROIDS
 ##################################################################################################################################
 
-    def plot_particle_centroids(self, title, min_size_mm = 0.5):
-        centers = [[contour['center'] for contour in image_contour_data['contours'] if contour['length_mm'] >= min_size_mm] for image_contour_data in self.all_non_bubble_contours]
-        centers = [item for sublist in centers for item in sublist]  # flatten the list
-        centers_x = [item[0] for item in centers]
-        centers_y = list(IMAGE_DIMENSIONS[1] - np.array([item[1] for item in centers]))  # flip up/down from image coordinates for matplotlib
-        plt.figure(figsize=(15, 10))
-        plt.scatter(centers_x, centers_y, 1.0)
-        plt.xlim([0, IMAGE_DIMENSIONS[0]])
-        plt.ylim([0, IMAGE_DIMENSIONS[1]])
-        plt.title(title)
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.results_path, title + '.pdf'))
+    def plot_particle_centroids(self, title=None, min_size_mm=0.5, for_masking=False):
+        if not for_masking:  # generate the pdf for easy review, with axes labels etc
+            centers = [[contour['center'] for contour in image_contour_data['contours'] if contour['length_mm'] >= min_size_mm] for image_contour_data in self.all_non_bubble_contours]
+            centers = [item for sublist in centers for item in sublist]  # flatten the list
+            centers_x = [item[0] for item in centers]
+            centers_y = list(IMAGE_DIMENSIONS[1] - np.array([item[1] for item in centers]))  # flip up/down from image coordinates for matplotlib
+            plt.figure(figsize=(15, 10))
+            plt.scatter(centers_x, centers_y, 1.0)
+            plt.xlim([0, IMAGE_DIMENSIONS[0]])
+            plt.ylim([0, IMAGE_DIMENSIONS[1]])
+            if title is not None:
+                plt.title(title)
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.results_path, title + '.pdf'))
+            plt.close()
+        else:  # generate a jpeg for post-processing mask creation, in the same size as original iamges
+            small_centers = [[contour['center'] for contour in image_contour_data['contours'] if contour['length_mm'] <= 1.5] for image_contour_data in self.all_non_bubble_contours]
+            small_centers = [item for sublist in small_centers for item in sublist]  # flatten the list
+            small_centers_x = [item[0] for item in small_centers]
+            small_centers_y = list(IMAGE_DIMENSIONS[1] - np.array([item[1] for item in small_centers]))  # flip up/down from image coordinates for matplotlib
+            large_centers = [[contour['center'] for contour in image_contour_data['contours'] if contour['length_mm'] > 1.5] for image_contour_data in self.all_non_bubble_contours]
+            large_centers = [item for sublist in large_centers for item in sublist]  # flatten the list
+            large_centers_x = [item[0] for item in large_centers]
+            large_centers_y = list(IMAGE_DIMENSIONS[1] - np.array([item[1] for item in large_centers]))  # flip up/down from image coordinates for matplotlib
+            fig, ax = plt.subplots(1, 1, figsize=(7952/350, 5304/350), dpi=350)
+            plt.scatter(small_centers_x, small_centers_y, 1.0)
+            plt.scatter(large_centers_x, large_centers_y, 1.0, color='orangered')
+            plt.xlim([0, IMAGE_DIMENSIONS[0]])
+            plt.ylim([0, IMAGE_DIMENSIONS[1]])
+            ax.axes.xaxis.set_visible(False)
+            ax.axes.yaxis.set_visible(False)
+            plt.subplots_adjust(top=1, bottom=0, left=0, right=1)
+            plt.savefig(os.path.join(self.results_path, 'Particle Detection Locations for Masking.jpg'), dpi=350)
+            plt.close()
 
 # Example usage
 
