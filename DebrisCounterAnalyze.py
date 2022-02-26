@@ -123,8 +123,8 @@ class DebrisCounterAnalysis:
         background_subtracted_image = self.subtract_median_from(grayscale_image)
         return background_subtracted_image
 
-    def detect_and_save_particles(self, max_images=None):
-        self.process_images(max_images)
+    def detect_and_save_particles(self, max_images=None, exclude_images=None):
+        self.process_images(max_images, exclude_images)
         if len(self.excluded_images_too_dark) > 0:
             excluded_image_list_path = os.path.join(self.results_path, self.site_name + " Excluded Images (Too Dark No Flash).txt")
             with open(excluded_image_list_path, "w") as textfile:
@@ -134,7 +134,7 @@ class DebrisCounterAnalysis:
 
     def update_qc_centroids(self, max_allowable_bubble_probability=0.99):
         """ Utility to redo the centroid map for building post-processing exclusion filters in image sets that didn't start with one. """
-        self.load_raw_contours()
+        self.load_raw_contours(partial=False)
         if self.post_exclusion_mask is not None:
             def is_not_masked_out(contour):
                 return self.post_exclusion_mask[contour['center'][1], contour['center'][0]] > 0.5
@@ -153,11 +153,9 @@ class DebrisCounterAnalysis:
         self.plot_particle_centroids(for_masking=True)
 
     def filter_and_summarize_particles(self, max_allowable_bubble_probability=0.5, spreadsheet_count=200, do_overlays=True, exclude_images=None):
-        self.load_raw_contours()
+        self.load_raw_contours(partial=False)
         if exclude_images is not None:
             self.exclude_images(exclude_images)
-        # result.all_contours[0]['contours'][0]['center']
-        # result.post_exclusion_mask[contour_center[1], contour_center[0]]
         if self.post_exclusion_mask is not None:
             def is_not_masked_out(contour):
                 return self.post_exclusion_mask[contour['center'][1], contour['center'][0]] > 0.5
@@ -274,15 +272,22 @@ class DebrisCounterAnalysis:
         mean_of_blurred_median = np.mean(blurred_median)  # get the average intensity of the median-blurred median image
         self.intensity_multipliers = mean_of_blurred_median / blurred_median  # divide that average intensity by the blurred median image values to get an array of multipliers
 
-    def process_images(self, max_images=None):
+    def process_images(self, max_images=None, exclude_images=None):
         num_images = len(self.files) if max_images is None else max_images
         self.total_volume_sampled = VOLUME_SAMPLED_PER_IMAGE_M3 * num_images * self.image_proportion_processed
         all_filenames = [os.path.basename(file_path) for file_path in self.files]
+        if exclude_images is not None:
+            images_to_exclude = [item for item in exclude_images if isinstance(item, int)]
+            image_ranges = [item for item in exclude_images if isinstance(item, list) and len(item) == 2]
+            for range_start, range_end in image_ranges:
+                for i in np.arange(range_start, range_end + 1):
+                    images_to_exclude.append(i)
+            all_filenames = [filename for filename in all_filenames if int(filename.split(" ")[-1][:5]) not in images_to_exclude]
         if not os.path.exists(self.partial_filename):
             self.all_contours = []
             filenames_to_process = all_filenames
         else:
-            self.load_raw_contours()
+            self.load_raw_contours(partial=True)
             processed_filenames = [file_data['image_file'] for file_data in self.all_contours]
             filenames_to_process = [filename for filename in all_filenames if filename not in processed_filenames]
         print("Creating initial background image.")
@@ -344,7 +349,7 @@ class DebrisCounterAnalysis:
             if os.path.exists(self.partial_filename):
                 os.remove(self.partial_filename)
 
-    def load_raw_contours(self, partial=True):
+    def load_raw_contours(self, partial):
         print("Loading raw contours from file.")
         saved_contours_path = self.partial_filename if partial else self.full_filename
         if not os.path.exists(saved_contours_path):
@@ -356,7 +361,7 @@ class DebrisCounterAnalysis:
 
     def redo_bubble_probabilities(self):
         # Only to be used when I've changed the bubble probability formula and want to redo it from the result numbers without redoing every image
-        self.load_raw_contours()
+        self.load_raw_contours(partial=False)
         print("Recalculating contour bubble probabilities.")
         # test.all_contours[0]['contours'][0]['b_max']
         for image_contour_data in self.all_contours:
@@ -388,18 +393,23 @@ class DebrisCounterAnalysis:
         cv2.drawContours(color_image, contours_maybe_bubbles_2, -1, (82, 255, 253), 2)    # lemon, likely to be bubbles in otherwise good images
         cv2.drawContours(color_image, contours_maybe_bubbles_3, -1, (0, 91, 255), 2)   # bright orange, very likely to be bubbles
         cv2.drawContours(color_image, contours_maybe_bubbles_4, -1, (2, 0, 254), 2)   # fire engine red, extremely likely to be bubbles
-        image_output_path = os.path.join(self.results_path, "Detection Images", os.path.basename(image_contour_data['image_file'])[:-4] + " Detections.jpg")
+        image_output_path = os.path.join(self.results_path, "Detection Images", os.path.basename(image_contour_data['image_file'])[:-4] + f" Detections ({len(contours_that_arent_bubbles)+len(contours_maybe_bubbles_2)+len(contours_maybe_bubbles_3)}).jpg")
         cv2.imwrite(image_output_path, color_image, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
 
     def make_overlays(self):
         # Creates overlays of the detected particles in all images at intervals (specified by the constant at the top of the file) as well
-        # as those with the 5 % most and 5 % fewest detections, so they can be spot checked for anomalies.
+        # as those with the most and fewest detections, and those detecting the largest contours, so they can be spot checked for anomalies.
         image_contour_counts = [len(image_data['contours']) for image_data in self.all_contours]
-        percentile_5 = np.percentile(image_contour_counts, 5)
-        percentile_95 = np.percentile(image_contour_counts, 95)
+        image_largest_contour_areas = [max([contour['area'] for contour in image_data['contours']], default=0) for image_data in self.all_contours]
+        percentile_top_contoursize = np.percentile(image_largest_contour_areas, 99)
         for i, image_data in enumerate(self.all_contours):
+            min_index = min(i-100, 0)  # will create overlays for all images with contour counts in the top 5 % of adjacent images
+            max_index = max(i+100, len(self.all_contours))
+            percentile_bottom = np.percentile(image_contour_counts[min_index:max_index], 1)
+            percentile_top = np.percentile(image_contour_counts[min_index:max_index], 99)
             num_contours_in_image = len(image_data['contours'])
-            if i % DETECTION_OVERLAY_IMAGE_INCREMENT == 0 or num_contours_in_image <= percentile_5 or num_contours_in_image >= percentile_95:
+            largest_contour_area_in_image = max([contour['area'] for contour in image_data['contours']], default=0)
+            if i % DETECTION_OVERLAY_IMAGE_INCREMENT == 0 or num_contours_in_image <= percentile_bottom or num_contours_in_image >= percentile_top or largest_contour_area_in_image >= percentile_top_contoursize:
                 print("Making detection overlay image for", image_data['image_file'], "(image", i+1,"of", len(self.all_contours), ").")
                 self.make_single_image_overlay(image_data)
 
