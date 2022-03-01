@@ -16,6 +16,7 @@ PIXELS_PER_MM = 24.1
 VOLUME_SAMPLED_PER_IMAGE_M3 = 0.002914
 IMAGE_DIMENSIONS = (7952, 5304)
 MEAN_BUBBLE_COLOR_NORMALIZED = np.array([1.07, 0.97, 0.96])
+CONTOUR_SAVE_INTERVAL = 100  # save measured contour to file every this many images -- saves are slow
 
 RESULTS_SHARED_FOLDER = os.path.join(os.path.expanduser("~"), 'Dropbox', 'SFR', 'Projects', '2019 Chena Drift Project', 'Chena Drift Project Data', 'Debris Particle Counts')
 
@@ -326,7 +327,7 @@ class DebrisCounterAnalysis:
             if i >= MIN_IMAGES_PER_SIZE_CLASS:
                 size_class_indices_exceeding_max_particles = np.where(self.size_class_particle_totals >= MAX_PARTICLES_PER_SIZE_CLASS)
                 self.size_class_counting_flags[size_class_indices_exceeding_max_particles] = 0
-            if i % 10 == 0:
+            if i % CONTOUR_SAVE_INTERVAL == 0:
                 self.save_raw_contours(partial=True)
             if i % 100 == 0:
                 self.compute_intensity_multipliers()
